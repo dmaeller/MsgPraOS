@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Agendamentos WhatsApp</title>
+
+<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+body{
+    font-family: Arial;
+    background:#f5f5f5;
+    padding:20px;
+}
+
+.card{
+    background:white;
+    padding:15px;
+    margin-bottom:15px;
+    border-radius:10px;
+    box-shadow:0 2px 5px rgba(0,0,0,0.1);
+}
+
+textarea{
+    width:100%;
+    height:180px;
+    margin-top:10px;
+}
+
+button{
+    padding:10px 15px;
+    margin-top:10px;
+    margin-right:10px;
+    cursor:pointer;
+}
+
+h2{
+    margin:0;
+}
+</style>
+</head>
+<body>
+
+<h1>Gerador WhatsApp Verisure</h1>
+
+<input type="file" id="upload" accept=".xlsx,.xls">
+
+<div id="resultados"></div>
+
+<script>
+
+document.getElementById('upload').addEventListener('change', handleFile);
+
+function handleFile(e){
+
+    const file = e.target.files[0];
+
+    const reader = new FileReader();
+
+    reader.onload = function(event){
+
+        const data = new Uint8Array(event.target.result);
+
+        const workbook = XLSX.read(data, {type:'array'});
+
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+
+        const json = XLSX.utils.sheet_to_json(sheet, {
+            header: 1
+        });
+
+        gerarMensagens(json);
+    };
+
+    reader.readAsArrayBuffer(file);
+}
+
+function formatarData(dataTexto){
+
+    if(!dataTexto) return '';
+
+    const partes = String(dataTexto).split('/');
+
+    if(partes.length !== 3) return dataTexto;
+
+    const dia = parseInt(partes[0],10);
+    const mes = parseInt(partes[1],10)-1;
+    let ano = parseInt(partes[2],10);
+
+    if(ano < 100){
+        ano += 2000;
+    }
+
+    const data = new Date(ano, mes, dia);
+
+    const diasSemana = [
+        'domingo',
+        'segunda-feira',
+        'terça-feira',
+        'quarta-feira',
+        'quinta-feira',
+        'sexta-feira',
+        'sábado'
+    ];
+
+    return `${diasSemana[data.getDay()]} (${partes[0]}/${partes[1]})`;
+}
+
+function gerarMensagens(dados){
+
+    const container = document.getElementById('resultados');
+
+    container.innerHTML = '';
+
+    dados.slice(1).forEach((linha,index)=>{
+
+        const os = linha[1]; // Coluna B
+
+        if(!os || String(os).trim() === ''){
+            return;
+        }
+
+        const dataAtendimento = formatarData(linha[0]); // Coluna A
+
+        const endereco = linha[7]; // Coluna H
+
+        const periodoOriginal = linha[14] || '';
+
+        let periodo = periodoOriginal;
+
+        if(periodoOriginal.includes('-')){
+
+            const partes = periodoOriginal.split('-');
+
+            const inicio = partes[0].padStart(2,'0');
+            const fim = partes[1].padStart(2,'0');
+
+            periodo = `${inicio}:00 - ${fim}:00`;
+        }
+
+        const atividade = linha[25]; // Coluna Z
+
+        const telefone = String(linha[10] || '')
+            .replace(/\D/g,'');
+
+        const mensagem =
+`Olá
+
+Sou Daniela, falo do setor de agendamento técnico da Verisure.
+
+Estou fazendo contato devido a um atendimento agendado para
+${dataAtendimento} no período ${periodo}
+
+Endereço: ${endereco}
+Motivo do chamado: ${atividade}
+
+Podemos confirmar?`;
+
+        const encoded = encodeURIComponent(mensagem);
+
+        const whatsapp =
+`https://wa.me/55${telefone}?text=${encoded}`;
+
+        const card = document.createElement('div');
+
+        card.className = 'card';
+
+        card.innerHTML = `
+            <h2>OS: ${os}</h2>
+
+            <p><b>Telefone:</b> ${telefone}</p>
+
+            <textarea id="msg${index}">${mensagem}</textarea>
+
+            <br>
+
+            <button onclick="window.open('${whatsapp}')">
+                Abrir WhatsApp
+            </button>
+
+            <button onclick="copiar('msg${index}')">
+                Copiar Mensagem
+            </button>
+        `;
+
+        container.appendChild(card);
+    });
+}
+
+function copiar(id){
+
+    const textarea = document.getElementById(id);
+
+    textarea.select();
+
+    document.execCommand('copy');
+
+    alert('Mensagem copiada!');
+}
+
+</script>
+
+</body>
+</html>
