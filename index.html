@@ -2,203 +2,171 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<title>Agendamentos WhatsApp</title>
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agendamentos Verisure</title>
 <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
-
 <style>
-body{
-    font-family: Arial;
-    background:#f5f5f5;
-    padding:20px;
-}
-
-.card{
-    background:white;
-    padding:15px;
-    margin-bottom:15px;
-    border-radius:10px;
-    box-shadow:0 2px 5px rgba(0,0,0,0.1);
-}
-
-textarea{
-    width:100%;
-    height:180px;
-    margin-top:10px;
-}
-
-button{
-    padding:10px 15px;
-    margin-top:10px;
-    margin-right:10px;
-    cursor:pointer;
-}
-
-h2{
-    margin:0;
-}
+*{box-sizing:border-box}
+body{font-family:Segoe UI,Arial,sans-serif;background:#f4f6f8;padding:20px;margin:0}
+h1{color:#d71920}
+.topo{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
+input[type=file],#busca{padding:12px;border:1px solid #ddd;border-radius:8px}
+#busca{flex:1}
+#resultados{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:5px solid #d71920}
+.os{font-size:20px;font-weight:700;color:#d71920;margin-bottom:12px}
+.campo{margin-bottom:10px}
+.campo label{display:block;font-size:12px;font-weight:700;color:#666;margin-bottom:4px}
+.campo input,.campo textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:8px}
+.campo textarea{min-height:60px}
+.acoes{display:flex;gap:10px;margin-top:12px}
+button{border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
+.copiar{background:#111827;color:#fff}
+.ver{background:#d71920;color:#fff}
+.preview{display:none;margin-top:12px}
+.preview textarea{width:100%;height:180px}
+.toast{position:fixed;right:20px;bottom:20px;background:#111827;color:#fff;padding:12px;border-radius:8px;display:none}
+@media(max-width:900px){#resultados{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
-<h1>Gerador WhatsApp Verisure</h1>
-
+<h1>Agendamentos Verisure</h1>
+<div class="topo">
 <input type="file" id="upload" accept=".xlsx,.xls">
-
+<input type="text" id="busca" placeholder="Buscar OS, endereço ou motivo...">
+</div>
 <div id="resultados"></div>
+<div id="toast" class="toast">Mensagem copiada</div>
 
 <script>
+document.getElementById('upload').addEventListener('change',handleFile);
+document.getElementById('busca').addEventListener('input',filtrar);
 
-document.getElementById('upload').addEventListener('change', handleFile);
-
-function handleFile(e){
-
-    const file = e.target.files[0];
-
-    const reader = new FileReader();
-
-    reader.onload = function(event){
-
-        const data = new Uint8Array(event.target.result);
-
-        const workbook = XLSX.read(data, {type:'array'});
-
-        const sheet = workbook.Sheets[workbook.SheetNames[0]];
-
-        const json = XLSX.utils.sheet_to_json(sheet, {
-            header: 1
-        });
-
-        gerarMensagens(json);
-    };
-
-    reader.readAsArrayBuffer(file);
+function formatarData(txt){
+ if(!txt) return '';
+ const p=String(txt).split('/');
+ if(p.length!==3) return txt;
+ let ano=parseInt(p[2],10); if(ano<100) ano+=2000;
+ const d=new Date(ano,parseInt(p[1])-1,parseInt(p[0]));
+ const dias=['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
+ return `${dias[d.getDay()]} (${p[0]}/${p[1]})`;
 }
 
-function formatarData(dataTexto){
-
-    if(!dataTexto) return '';
-
-    const partes = String(dataTexto).split('/');
-
-    if(partes.length !== 3) return dataTexto;
-
-    const dia = parseInt(partes[0],10);
-    const mes = parseInt(partes[1],10)-1;
-    let ano = parseInt(partes[2],10);
-
-    if(ano < 100){
-        ano += 2000;
-    }
-
-    const data = new Date(ano, mes, dia);
-
-    const diasSemana = [
-        'domingo',
-        'segunda-feira',
-        'terça-feira',
-        'quarta-feira',
-        'quinta-feira',
-        'sexta-feira',
-        'sábado'
-    ];
-
-    return `${diasSemana[data.getDay()]} (${partes[0]}/${partes[1]})`;
+function handleFile(e){
+ const file=e.target.files[0];
+ const r=new FileReader();
+ r.onload=function(ev){
+   const wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array'});
+   const sheet=wb.Sheets[wb.SheetNames[0]];
+   gerarMensagens(XLSX.utils.sheet_to_json(sheet,{header:1}));
+ };
+ r.readAsArrayBuffer(file);
 }
 
 function gerarMensagens(dados){
+ const c=document.getElementById('resultados');
+ c.innerHTML='';
 
-    const container = document.getElementById('resultados');
+ dados.slice(1).forEach((linha,index)=>{
+   const os=linha[1];
+   if(!os || String(os).trim()==='') return;
 
-    container.innerHTML = '';
+   const data=formatarData(linha[0]);
+   const endereco=linha[7]||'';
+   const atividade=linha[25]||'';
 
-    dados.slice(1).forEach((linha,index)=>{
+   let periodo=linha[14]||'';
+   if(periodo.includes('-')){
+      const p=periodo.split('-');
+      periodo=`${p[0].padStart(2,'0')}:00 - ${p[1].padStart(2,'0')}:00`;
+   }
 
-        const os = linha[1]; // Coluna B
+   const card=document.createElement('div');
+   card.className='card';
+   card.dataset.busca=`${os} ${endereco} ${atividade}`.toLowerCase();
 
-        if(!os || String(os).trim() === ''){
-            return;
-        }
+   card.innerHTML=`
+   <div class="os">OS ${os}</div>
 
-        const dataAtendimento = formatarData(linha[0]); // Coluna A
+   <div class="campo">
+     <label>Nome</label>
+     <input id="nome${index}" placeholder="sr. João">
+   </div>
 
-        const endereco = linha[7]; // Coluna H
+   <div class="campo">
+     <label>Data</label>
+     <input id="data${index}" value="${data}">
+   </div>
 
-        const periodoOriginal = linha[14] || '';
+   <div class="campo">
+     <label>Período</label>
+     <input id="periodo${index}" value="${periodo}">
+   </div>
 
-        let periodo = periodoOriginal;
+   <div class="campo">
+     <label>Endereço</label>
+     <textarea id="endereco${index}">${endereco}</textarea>
+   </div>
 
-        if(periodoOriginal.includes('-')){
+   <div class="campo">
+     <label>Motivo</label>
+     <textarea id="atividade${index}">${atividade}</textarea>
+   </div>
 
-            const partes = periodoOriginal.split('-');
+   <div class="acoes">
+     <button class="copiar" onclick="copiarMensagem(${index})">📋 Copiar</button>
+     <button class="ver" onclick="togglePreview(${index})">👁 Visualizar</button>
+   </div>
 
-            const inicio = partes[0].padStart(2,'0');
-            const fim = partes[1].padStart(2,'0');
+   <div class="preview" id="preview${index}">
+      <textarea readonly id="previewTexto${index}"></textarea>
+   </div>`;
 
-            periodo = `${inicio}:00 - ${fim}:00`;
-        }
+   c.appendChild(card);
+ });
+}
 
-        const atividade = linha[25]; // Coluna Z
+function gerarMensagem(i){
+ const nome=document.getElementById(`nome${i}`).value.trim();
+ const data=document.getElementById(`data${i}`).value;
+ const periodo=document.getElementById(`periodo${i}`).value;
+ const endereco=document.getElementById(`endereco${i}`).value;
+ const atividade=document.getElementById(`atividade${i}`).value;
 
-        const telefone = String(linha[10] || '')
-            .replace(/\D/g,'');
+ const saudacao=nome ? `Olá ${nome},` : 'Olá';
 
-        const mensagem =
-`Olá
+ return `${saudacao}
 
 Sou Daniela, falo do setor de agendamento técnico da Verisure.
 
 Estou fazendo contato devido a um atendimento agendado para
-${dataAtendimento} no período ${periodo}
+${data} no período ${periodo}
 
 Endereço: ${endereco}
 Motivo do chamado: ${atividade}
 
 Podemos confirmar?`;
-
-        const encoded = encodeURIComponent(mensagem);
-
-        const whatsapp =
-`https://wa.me/55${telefone}?text=${encoded}`;
-
-        const card = document.createElement('div');
-
-        card.className = 'card';
-
-        card.innerHTML = `
-            <h2>OS: ${os}</h2>
-
-            <p><b>Telefone:</b> ${telefone}</p>
-
-            <textarea id="msg${index}">${mensagem}</textarea>
-
-            <br>
-
-            <button onclick="window.open('${whatsapp}')">
-                Abrir WhatsApp
-            </button>
-
-            <button onclick="copiar('msg${index}')">
-                Copiar Mensagem
-            </button>
-        `;
-
-        container.appendChild(card);
-    });
 }
 
-function copiar(id){
-
-    const textarea = document.getElementById(id);
-
-    textarea.select();
-
-    document.execCommand('copy');
-
-    alert('Mensagem copiada!');
+async function copiarMensagem(i){
+ await navigator.clipboard.writeText(gerarMensagem(i));
+ const t=document.getElementById('toast');
+ t.style.display='block';
+ setTimeout(()=>t.style.display='none',2000);
 }
 
+function togglePreview(i){
+ const p=document.getElementById(`preview${i}`);
+ document.getElementById(`previewTexto${i}`).value=gerarMensagem(i);
+ p.style.display=p.style.display==='block'?'none':'block';
+}
+
+function filtrar(){
+ const termo=document.getElementById('busca').value.toLowerCase();
+ document.querySelectorAll('.card').forEach(card=>{
+   card.style.display=card.dataset.busca.includes(termo)?'block':'none';
+ });
+}
 </script>
-
 </body>
 </html>
