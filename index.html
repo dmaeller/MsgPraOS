@@ -4,168 +4,258 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agendamentos Verisure</title>
-<script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
 *{box-sizing:border-box}
 body{font-family:Segoe UI,Arial,sans-serif;background:#f4f6f8;padding:20px;margin:0}
-h1{color:#d71920}
-.topo{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}
-input[type=file],#busca{padding:12px;border:1px solid #ddd;border-radius:8px}
-#busca{flex:1}
+h1{color:#d71920;margin-top:0}
+.topo{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+input[type=file],#busca{padding:12px;border:1px solid #ddd;border-radius:8px;background:#fff}
+#busca{flex:1;min-width:200px}
+#contador{font-size:13px;color:#666;margin-bottom:16px}
 #resultados{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
 .card{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.08);border-left:5px solid #d71920}
+.card.enviado{border-left-color:#16a34a;opacity:.75}
+.card.oculto{display:none}
 .os{font-size:20px;font-weight:700;color:#d71920;margin-bottom:12px}
+.card.enviado .os::after{content:" ✔ registrado";font-size:13px;color:#16a34a;font-weight:600}
 .campo{margin-bottom:10px}
 .campo label{display:block;font-size:12px;font-weight:700;color:#666;margin-bottom:4px}
-.campo input,.campo textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:8px}
-.campo textarea{min-height:60px}
-.acoes{display:flex;gap:10px;margin-top:12px}
-button{border:none;padding:10px 14px;border-radius:8px;cursor:pointer}
+.campo input,.campo textarea{width:100%;padding:8px;border:1px solid #ddd;border-radius:8px;font:inherit}
+.campo textarea{min-height:60px;resize:vertical}
+.acoes{display:flex;gap:10px;margin-top:12px;flex-wrap:wrap}
+button{border:none;padding:10px 14px;border-radius:8px;cursor:pointer;font:inherit}
 .copiar{background:#111827;color:#fff}
+.linha{background:#16a34a;color:#fff}
 .ver{background:#d71920;color:#fff}
 .preview{display:none;margin-top:12px}
-.preview textarea{width:100%;height:180px}
+.preview.aberto{display:block}
+.preview textarea{width:100%;height:180px;font:inherit;padding:8px;border:1px solid #ddd;border-radius:8px}
 .toast{position:fixed;right:20px;bottom:20px;background:#111827;color:#fff;padding:12px;border-radius:8px;display:none}
 @media(max-width:900px){#resultados{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <h1>Agendamentos Verisure</h1>
+
 <div class="topo">
-<input type="file" id="upload" accept=".xlsx,.xls">
-<input type="text" id="busca" placeholder="Buscar OS, endereço ou motivo...">
+  <input type="file" id="upload" accept=".xlsx,.xls">
+  <input type="text" id="busca" placeholder="Buscar OS, endereço ou motivo...">
 </div>
+<div id="contador"></div>
 <div id="resultados"></div>
-<div id="toast" class="toast">Mensagem copiada</div>
+<div id="toast" class="toast"></div>
 
 <script>
-document.getElementById('upload').addEventListener('change',handleFile);
-document.getElementById('busca').addEventListener('input',filtrar);
+// Índices das colunas na planilha
+const COL = { data: 0, os: 1, endereco: 7, periodo: 14, atividade: 25 };
+const DIAS = ['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
 
-function formatarData(txt){
- if(!txt) return '';
- const p=String(txt).split('/');
- if(p.length!==3) return txt;
- let ano=parseInt(p[2],10); if(ano<100) ano+=2000;
- const d=new Date(ano,parseInt(p[1])-1,parseInt(p[0]));
- const dias=['domingo','segunda-feira','terça-feira','quarta-feira','quinta-feira','sexta-feira','sábado'];
- return `${dias[d.getDay()]} (${p[0]}/${p[1]})`;
+const $resultados = document.getElementById('resultados');
+const $contador = document.getElementById('contador');
+const $toast = document.getElementById('toast');
+let toastTimer;
+
+/* ---------- Utilitários ---------- */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+function mostrarToast(texto) {
+  $toast.textContent = texto;
+  $toast.style.display = 'block';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => $toast.style.display = 'none', 2000);
 }
 
-function handleFile(e){
- const file=e.target.files[0];
- const r=new FileReader();
- r.onload=function(ev){
-   const wb=XLSX.read(new Uint8Array(ev.target.result),{type:'array'});
-   const sheet=wb.Sheets[wb.SheetNames[0]];
-   gerarMensagens(XLSX.utils.sheet_to_json(sheet,{header:1}));
- };
- r.readAsArrayBuffer(file);
+async function copiarTexto(texto) {
+  try {
+    await navigator.clipboard.writeText(texto);
+  } catch {
+    // Fallback para contextos sem permissão de clipboard (ex.: abrir via file://)
+    const ta = document.createElement('textarea');
+    ta.value = texto;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    ta.remove();
+  }
 }
 
-function gerarMensagens(dados){
- const c=document.getElementById('resultados');
- c.innerHTML='';
+/* ---------- Formatação ---------- */
+function formatarData(valor) {
+  if (valor === undefined || valor === null || valor === '') return '';
+  let d, dd, mm;
 
- dados.slice(1).forEach((linha,index)=>{
-   const os=linha[1];
-   if(!os || String(os).trim()==='') return;
+  if (typeof valor === 'number') {            // data serial do Excel
+    d = new Date(Math.round((valor - 25569) * 86400 * 1000));
+    dd = String(d.getUTCDate()).padStart(2, '0');
+    mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return `${DIAS[d.getUTCDay()]} (${dd}/${mm})`;
+  }
 
-   const data=formatarData(linha[0]);
-   const endereco=linha[7]||'';
-   const atividade=linha[25]||'';
-
-   let periodo=linha[14]||'';
-   if(periodo.includes('-')){
-      const p=periodo.split('-');
-      periodo=`${p[0].padStart(2,'0')}:00 - ${p[1].padStart(2,'0')}:00`;
-   }
-
-   const card=document.createElement('div');
-   card.className='card';
-   card.dataset.busca=`${os} ${endereco} ${atividade}`.toLowerCase();
-
-   card.innerHTML=`
-   <div class="os">OS ${os}</div>
-
-   <div class="campo">
-     <label>Nome</label>
-     <input id="nome${index}" placeholder="sr. João">
-   </div>
-
-   <div class="campo">
-     <label>Data</label>
-     <input id="data${index}" value="${data}">
-   </div>
-
-   <div class="campo">
-     <label>Período</label>
-     <input id="periodo${index}" value="${periodo}">
-   </div>
-
-   <div class="campo">
-     <label>Endereço</label>
-     <textarea id="endereco${index}">${endereco}</textarea>
-   </div>
-
-   <div class="campo">
-     <label>Motivo</label>
-     <textarea id="atividade${index}">${atividade}</textarea>
-   </div>
-
-   <div class="acoes">
-     <button class="copiar" onclick="copiarMensagem(${index})">📋 Copiar</button>
-     <button class="ver" onclick="togglePreview(${index})">👁 Visualizar</button>
-   </div>
-
-   <div class="preview" id="preview${index}">
-      <textarea readonly id="previewTexto${index}"></textarea>
-   </div>`;
-
-   c.appendChild(card);
- });
+  const p = String(valor).split('/');
+  if (p.length !== 3) return String(valor);
+  let ano = parseInt(p[2], 10);
+  if (ano < 100) ano += 2000;
+  d = new Date(ano, parseInt(p[1], 10) - 1, parseInt(p[0], 10));
+  return `${DIAS[d.getDay()]} (${p[0]}/${p[1]})`;
 }
 
-function gerarMensagem(i){
- const nome=document.getElementById(`nome${i}`).value.trim();
- const data=document.getElementById(`data${i}`).value;
- const periodo=document.getElementById(`periodo${i}`).value;
- const endereco=document.getElementById(`endereco${i}`).value;
- const atividade=document.getElementById(`atividade${i}`).value;
+function formatarPeriodo(valor) {
+  const txt = String(valor ?? '').trim();
+  const m = txt.match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);
+  if (!m) return txt;
+  return `${m[1].padStart(2, '0')}:00 - ${m[2].padStart(2, '0')}:00`;
+}
 
- const saudacao=nome ? `Olá ${nome},` : 'Olá';
+/* ---------- Leitura da planilha ---------- */
+document.getElementById('upload').addEventListener('change', e => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+    const sheet = wb.Sheets[wb.SheetNames[0]];
+    gerarCards(XLSX.utils.sheet_to_json(sheet, { header: 1 }));
+  };
+  reader.readAsArrayBuffer(file);
+});
 
- return `${saudacao}
+/* ---------- Cards ---------- */
+function gerarCards(dados) {
+  const html = [];
+
+  dados.slice(1).forEach((linha, i) => {
+    const os = linha[COL.os];
+    if (os === undefined || String(os).trim() === '') return;
+
+    const endereco = linha[COL.endereco] || '';
+    const atividade = linha[COL.atividade] || '';
+
+    html.push(`
+    <div class="card" data-os="${esc(os)}" data-busca="${esc(`${os} ${endereco} ${atividade}`.toLowerCase())}">
+      <div class="os">OS ${esc(os)}</div>
+
+      <div class="campo"><label>Nome</label>
+        <input data-campo="nome" placeholder="sr. João"></div>
+
+      <div class="campo"><label>Data</label>
+        <input data-campo="data" value="${esc(formatarData(linha[COL.data]))}"></div>
+
+      <div class="campo"><label>Período</label>
+        <input data-campo="periodo" value="${esc(formatarPeriodo(linha[COL.periodo]))}"></div>
+
+      <div class="campo"><label>Endereço</label>
+        <textarea data-campo="endereco">${esc(endereco)}</textarea></div>
+
+      <div class="campo"><label>Motivo</label>
+        <textarea data-campo="atividade">${esc(atividade)}</textarea></div>
+
+      <div class="acoes">
+        <button class="copiar" data-acao="mensagem">📋 Copiar</button>
+        <button class="linha" data-acao="linha">📊 Copiar linha</button>
+        <button class="ver" data-acao="preview">👁 Visualizar</button>
+      </div>
+
+      <div class="preview"><textarea readonly></textarea></div>
+    </div>`);
+  });
+
+  $resultados.innerHTML = html.join('');
+  document.getElementById('busca').value = '';
+  atualizarContador();
+}
+
+function lerCampos(card) {
+  const v = nome => card.querySelector(`[data-campo="${nome}"]`).value;
+  return {
+    os: card.dataset.os,
+    nome: v('nome').trim(),
+    data: v('data'),
+    periodo: v('periodo'),
+    endereco: v('endereco'),
+    atividade: v('atividade')
+  };
+}
+
+function montarMensagem(c) {
+  const saudacao = c.nome ? `Olá ${c.nome},` : 'Olá';
+  return `${saudacao}
 
 Sou Daniela, falo do setor de agendamento técnico da Verisure.
 
 Estou fazendo contato devido a um atendimento agendado para
-${data} no período ${periodo}
+${c.data} no período ${c.periodo}
 
-Endereço: ${endereco}
-Motivo do chamado: ${atividade}
+Endereço: ${c.endereco}
+Motivo do chamado: ${c.atividade}
 
 Podemos confirmar?`;
 }
 
-async function copiarMensagem(i){
- await navigator.clipboard.writeText(gerarMensagem(i));
- const t=document.getElementById('toast');
- t.style.display='block';
- setTimeout(()=>t.style.display='none',2000);
+// Contrato (OS) ⇥ Horário (período) ⇥ Cliente — cola em 3 colunas na planilha
+function montarLinha(c) {
+  const limpar = s => String(s).replace(/[\t\r\n]+/g, ' ').trim();
+  return [c.os, c.periodo, c.nome].map(limpar).join('\t');
 }
 
-function togglePreview(i){
- const p=document.getElementById(`preview${i}`);
- document.getElementById(`previewTexto${i}`).value=gerarMensagem(i);
- p.style.display=p.style.display==='block'?'none':'block';
-}
+/* ---------- Eventos (delegação) ---------- */
+$resultados.addEventListener('click', async e => {
+  const btn = e.target.closest('button[data-acao]');
+  if (!btn) return;
+  const card = btn.closest('.card');
+  const campos = lerCampos(card);
 
-function filtrar(){
- const termo=document.getElementById('busca').value.toLowerCase();
- document.querySelectorAll('.card').forEach(card=>{
-   card.style.display=card.dataset.busca.includes(termo)?'block':'none';
- });
+  switch (btn.dataset.acao) {
+    case 'mensagem':
+      await copiarTexto(montarMensagem(campos));
+      mostrarToast('Mensagem copiada');
+      break;
+
+    case 'linha':
+      if (!campos.nome) { mostrarToast('Preencha o nome antes de copiar a linha'); return; }
+      await copiarTexto(montarLinha(campos));
+      card.classList.add('enviado');
+      mostrarToast('Linha copiada para a planilha');
+      atualizarContador();
+      break;
+
+    case 'preview': {
+      const prev = card.querySelector('.preview');
+      prev.querySelector('textarea').value = montarMensagem(campos);
+      prev.classList.toggle('aberto');
+      break;
+    }
+  }
+});
+
+// Mantém a visualização atualizada enquanto edita os campos
+$resultados.addEventListener('input', e => {
+  const card = e.target.closest('.card');
+  const prev = card && card.querySelector('.preview.aberto');
+  if (prev) prev.querySelector('textarea').value = montarMensagem(lerCampos(card));
+});
+
+/* ---------- Busca ---------- */
+let buscaTimer;
+document.getElementById('busca').addEventListener('input', e => {
+  clearTimeout(buscaTimer);
+  buscaTimer = setTimeout(() => {
+    const termo = e.target.value.toLowerCase().trim();
+    $resultados.querySelectorAll('.card').forEach(card => {
+      card.classList.toggle('oculto', !card.dataset.busca.includes(termo));
+    });
+    atualizarContador();
+  }, 150);
+});
+
+function atualizarContador() {
+  const cards = $resultados.querySelectorAll('.card');
+  if (!cards.length) { $contador.textContent = ''; return; }
+  const visiveis = $resultados.querySelectorAll('.card:not(.oculto)').length;
+  const registrados = $resultados.querySelectorAll('.card.enviado').length;
+  $contador.textContent = `${visiveis} de ${cards.length} OS exibidas · ${registrados} registradas na planilha`;
 }
 </script>
 </body>
